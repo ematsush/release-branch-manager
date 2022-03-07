@@ -20,8 +20,11 @@ const MONTHS = [
 ];
 
 const CONSTANTS = {
-    ORGANIZATION: 'REPLACEME',
-    TEAM: 'REPLACEME'
+    ORGANIZATION: 'REPLACE_ME',
+    TEAM: 'REPLACE_ME',
+    TARGET_BRANCHES: [
+        'REPLACE_ME'
+    ]
 }
 
 const APIS = {
@@ -37,6 +40,30 @@ function createReleaseBranchName(date) {
 }
 
 const startsWithRefs = /^refs\/heads\//;
+
+function trimBranchName(branchName) {
+    if (startsWithRefs.test(branchName)) {
+        return branchName.replace(startsWithRefs, '');
+    } else {
+        return branchName;
+    }
+}
+
+function convertToGitBranchName(branchName) {
+    if (startsWithRefs.test(branchName)) {
+        return branchName;
+    } else {
+        return 'refs/heads/' + branchName;
+    }
+
+}
+
+// {
+//     id
+//     defaultBranch
+//     name
+// }
+const repoMap = {};
 
 ////////////////////////////////////////////////////////////////
 // SERVICE CALLS
@@ -67,7 +94,7 @@ function fetchBranchInfo(repoId, filterContains) {
         })
         .then(resp => {
             if (!resp.ok) {
-                throw 'REsponse from ADO was not OK';
+                throw 'Response from ADO was not OK';
             }
             return resp.json();
         })
@@ -82,9 +109,9 @@ function postNewReleaseBranch(repoId, branchName, rootId) {
             method: 'POST',
             headers: headers,
             body: JSON.stringify([{
-                'name': `refs/heads/${branchName}`,
-                'oldObjectId': '0000000000000000000000000000000000000000',
-                'newObjectId': rootId
+                name: branchName,
+                oldObjectId: '0000000000000000000000000000000000000000',
+                newObjectId: rootId
             }])
         })
         .then(resp => {
@@ -104,10 +131,11 @@ function getBranchDiff(repoId, baseBranch, targetBranch) {
             headers: headers
         })
         .then(resp => {
-            if (!resp.ok) {
-                throw 'Response from ADO was not OK';
+            if (resp.ok || resp.status === 404) {
+                return resp.json();
+            } else {
+                throw 'Response from ADO was not OK nor 404';
             }
-            return resp.json();
         })
         .catch(err => alert(err));
 }
@@ -141,35 +169,65 @@ function postPullRequest(repoId, sourceBranch, targetBranch, title, desc, review
 ////////////////////////////////////////////////////////////////
 
 async function tryToCreatePr(repoId, sourceBranch, targetBranch) {
-    if (startsWithRefs.test(sourceBranch)) {
-        throw 'sourceBranch should not start with refs/heads';
-    }
-    if (startsWithRefs.test(targetBranch)) {
-        throw 'targetBranch should not start with refs/heads';
-    }
-
     const diffResult = await getBranchDiff(repoId, targetBranch, sourceBranch);
 
-    if (diffResult.changes.length == 0) {
-        return Promise.resolve();
+    if (!diffResult.changes || diffResult.changes.length == 0) {
+        return { message: 'No changes or branch to create PR for', success: false };
     }
 
     const title = `Merge ${sourceBranch}`;
     const desc = `Merging ${sourceBranch} into ${targetBranch}`;
-    return await postPullRequest(repoId, 'refs/heads/' + sourceBranch, 'refs/heads/' + targetBranch, title, desc, []);
+    const srcB = convertToGitBranchName(sourceBranch);
+    const tarB = convertToGitBranchName(targetBranch);
+    const result = await postPullRequest(repoId, srcB, tarB, title, desc, []);
+    const message = result.mergeStatus === 'queued' ? 'PR created' : 'Failed to create PR';
+    return { message: message, success: result.mergeStatus === 'queued' };
 }
 
 async function createReleaseBranch(releaseDate, repoId) {
-    const defaultBranchInfo = await fetchBranchInfo(repoId, 'master');
-    const postResult = await postNewReleaseBranch(repoId, createReleaseBranchName(releaseDate), defaultBranchInfo.value[0].objectId);
+    const defaultBranchInfo = await fetchBranchInfo(repoId, repoMap[repoId].defaultBranch);
+    const gitBranchname = convertToGitBranchName(createReleaseBranchName(releaseDate));
+    const postResult = await postNewReleaseBranch(repoId, gitBranchname, defaultBranchInfo.value[0].objectId);
     return postResult.value.length > 0 && postResult.value[0].success;
+}
+
+async function loadRepositories() {
+    const jason = await fetchRepositories();
+    for (repo of jason.value) {
+        repoMap[repo.id] = {
+            id: repo.id,
+            defaultBranch: trimBranchName(repo.defaultBranch),
+            name: repo.name
+        }
+    }
+    return 'Success';
+}
+
+async function findReposWithRelBranches(date) {
+    await loadRepositories();
+    const branchInfos = [];
+    const relBranchName = createReleaseBranchName(date);
+    Object.entries(repoMap).forEach(el => {
+        const repoId = el[0];
+        branchInfos.push(fetchBranchInfo(repoId, relBranchName)
+            .then(jason => {
+                return {
+                    repoId: repoId,
+                    jason: jason
+                };
+            }));
+    });
+    return Promise.all(branchInfos).then(resp => {
+        return resp.filter(bInfo => bInfo.jason.count > 0)
+            .map(bInfo => bInfo.repoId);
+    });
 }
 
 ////////////////////////////////////////////////////////////////
 // RENDER
 ////////////////////////////////////////////////////////////////
 
-function renderBranchCreator() {
+async function renderBranchCreator() {
     const fieldSetEl = document.createElement('fieldset');
     fieldSetEl.id = 'repoFieldSet';
     const legendEl = document.createElement('legend');
@@ -205,23 +263,23 @@ function renderBranchCreator() {
         });
     });
 
-    fetchRepositories()
-        .then(jason => {
-            for (repo of jason.value) {
-                const checkBox = document.createElement('input');
-                checkBox.type = 'checkbox';
-                checkBox.id = repo.id;
-                checkBox.value = repo.id;
-                checkBox.name = repo.name;
+    await loadRepositories();
+    for (repoId in repoMap) {
+        const repo = repoMap[repoId];
 
-                const label = document.createElement('label');
-                label.innerText = repo.name;
-                label.for = repo.id;
-                fieldSetEl.appendChild(checkBox);
-                fieldSetEl.appendChild(label);
-                fieldSetEl.appendChild(document.createElement('br'));
-            }
-        });
+        const checkBox = document.createElement('input');
+        checkBox.type = 'checkbox';
+        checkBox.id = repo.id;
+        checkBox.value = repo.id;
+        checkBox.name = repo.name;
+
+        const label = document.createElement('label');
+        label.innerText = `${repo.name} - ${repo.defaultBranch}/`;
+        label.for = repo.id;
+        fieldSetEl.appendChild(checkBox);
+        fieldSetEl.appendChild(label);
+        fieldSetEl.appendChild(document.createElement('br'));
+    }
 }
 
 async function renderCreatePr() {
@@ -249,41 +307,24 @@ async function renderCreatePr() {
     controlAreaEl.appendChild(availableRepoDiv);
     controlAreaEl.appendChild(textAreaEl);
 
-    const repos = await fetchRepositories();
-    const responseList = [];
-    repos.value.forEach(el => {
-        responseList.push(fetchBranchInfo(el.id, releaseBranchName)
-            .then(jason => {
-                return {
-                    repoId: el.id,
-                    repoName: el.name,
-                    result: jason
-                };
-            }));
-    });
-
-    const reposToMerge = [];
-    Promise.all(responseList).then(resps => {
-        for (resp of resps) {
-            if (resp.result.value.length > 0) {
-                reposToMerge.push(resp.repoId);
-                const listItemEl = document.createElement('li');
-                listItemEl.innerText = resp.repoName;
-                ulEl.appendChild(listItemEl);
-            }
-        }
-    });
+    const reposToMerge = await findReposWithRelBranches(date);
+    for (repoId of reposToMerge) {
+        const listItemEl = document.createElement('li');
+        listItemEl.innerText = repoMap[repoId].name;
+        ulEl.appendChild(listItemEl);
+    }
 
     button.onclick = () => {
         reposToMerge.forEach(repoId => {
-            // modify here to add additional branches to merge into.
-            tryToCreatePr(repoId, releaseBranchName, 'master')
-                .then(resp => {
-                    if (resp) {
-                        const resultMessage = resp.repository.name + ' created PR into master\n';
-                        textAreaEl.value = textAreaEl.value ? textAreaEl.value + resultMessage : resultMessage;
-                    }
-                });
+            CONSTANTS.TARGET_BRANCHES.forEach(targetBranch => {
+                tryToCreatePr(repoId, releaseBranchName, targetBranch)
+                    .then(resp => {
+                        if (resp.success) {
+                            const resultMessage = repoMap[repoId].name + ` created PR into ${targetBranch}\n`;
+                            textAreaEl.value = textAreaEl.value ? textAreaEl.value + resultMessage : resultMessage;
+                        }
+                    });
+            });
         });
     };
 }

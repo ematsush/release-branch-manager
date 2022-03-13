@@ -1,6 +1,19 @@
 const userName = window.prompt('Enter username');
 const encodedAuthToken = btoa(`${userName}:${window.prompt('Enter PAT KEY')}`);
 
+// CONFIG.ORG_TEAMS Tells which orgs and projects branch_manager should scan to look for
+// repositories.
+// TARGET_BRANCHES List of branch names that branch_manager should create a PR into.
+const CONFIG = {
+    ORG_PROJECTS: [{
+        ORGANIZATION: 'REPLACE_ME',
+        PROJECT: 'REPLACE_ME'
+    }],
+    TARGET_BRANCHES: [
+        'REPLACE_ME'
+    ]
+};
+
 ////////////////////////////////////////////////////////////////
 // UTIL
 ////////////////////////////////////////////////////////////////
@@ -19,24 +32,33 @@ const MONTHS = [
     'DEC'
 ];
 
-const CONSTANTS = {
-    ORGANIZATION: 'REPLACE_ME',
-    TEAM: 'REPLACE_ME',
-    TARGET_BRANCHES: [
-        'REPLACE_ME'
-    ]
-}
-
 const APIS = {
-    listRepos: () => `https://dev.azure.com/${CONSTANTS.ORGANIZATION}/${CONSTANTS.TEAM}/_apis/git/repositories?api-version=7.0`,
-    createRef: repoId => `https://dev.azure.com/${CONSTANTS.ORGANIZATION}/${CONSTANTS.TEAM}/_apis/git/repositories/${repoId}/refs?api-version=7.0`,
-    retrieveRef: (repoId, filter) => `https://dev.azure.com/${CONSTANTS.ORGANIZATION}/${CONSTANTS.TEAM}/_apis/git/repositories/${repoId}/refs?api-version=7.0&filterContains=${encodeURIComponent(filter)}`,
-    getBranchDiff: (repoId, bBranch, tBranch) => `https://dev.azure.com/${CONSTANTS.ORGANIZATION}/${CONSTANTS.TEAM}/_apis/git/repositories/${repoId}/diffs/commits?api-version=7.0&baseVersion=${bBranch}&targetVersion=${tBranch}`,
-    createPr: repoId => `https://dev.azure.com/${CONSTANTS.ORGANIZATION}/${CONSTANTS.TEAM}/_apis/git/repositories/${repoId}/pullrequests?api-version=7.0`
+    listRepos: (org, project) => `https://dev.azure.com/${org}/${project}/_apis/git/repositories?api-version=7.0`,
+    createRef: repo => `https://dev.azure.com/${repo.org}/${repo.project}/_apis/git/repositories/${repo.adoId}/refs?api-version=7.0`,
+    retrieveRef: (repo, filter) => `https://dev.azure.com/${repo.org}/${repo.project}/_apis/git/repositories/${repo.adoId}/refs?api-version=7.0&filterContains=${encodeURIComponent(filter)}`,
+    getBranchDiff: (repo, bBranch, tBranch) => `https://dev.azure.com/${repo.org}/${repo.project}/_apis/git/repositories/${repo.adoId}/diffs/commits?api-version=7.0&baseVersion=${bBranch}&targetVersion=${tBranch}`,
+    createPr: repo => `https://dev.azure.com/${repo.org}/${repo.project}/_apis/git/repositories/${repo.adoId}/pullrequests?api-version=7.0`
 };
 
 function createReleaseBranchName(date) {
     return `release/${date.getFullYear()}-${MONTHS[date.getUTCMonth()]}-${date.getUTCDate()}`
+}
+
+/**
+ * @param {object} jsonObj
+ * @param {string} org
+ * @param {string} project
+ * @returns {Repository}
+ */
+function mapJsonToRepository(jsonObj, org, project, id) {
+    return new Repository(
+        id,
+        jsonObj.id,
+        trimBranchName(jsonObj.defaultBranch),
+        jsonObj.name,
+        org,
+        project
+    );
 }
 
 const startsWithRefs = /^refs\/heads\//;
@@ -58,21 +80,39 @@ function convertToGitBranchName(branchName) {
 
 }
 
-// {
-//     id
-//     defaultBranch
-//     name
-// }
+class Repository {
+    /**
+     * @param {string} id ID to be used within this app
+     * @param {string} adoId ID issued for the repo by ADO
+     * @param {string} defBranch
+     * @param {string} name
+     * @param {string} org
+     * @param {string} project
+     */
+    constructor(id, adoId, defBranch, name, org, project) {
+        this.id = id;
+        this.adoId = adoId;
+        this.defaultBranch = defBranch;
+        this.name = name;
+        this.org = org;
+        this.project = project;
+    }
+}
+
 const repoMap = {};
 
 ////////////////////////////////////////////////////////////////
 // SERVICE CALLS
 ////////////////////////////////////////////////////////////////
 
-function fetchRepositories() {
+/**
+ * @param {string} org
+ * @param {string} project
+ */
+function fetchRepositories(org, project) {
     const headers = new Headers();
     headers.append('Authorization', `Basic ${encodedAuthToken}`);
-    return fetch(APIS.listRepos(), {
+    return fetch(APIS.listRepos(org, project), {
             method: 'GET',
             headers: headers
         })
@@ -85,10 +125,15 @@ function fetchRepositories() {
         .catch(err => alert(err));
 }
 
-function fetchBranchInfo(repoId, filterContains) {
+
+/**
+ * @param {Repository} repo
+ * @param {string} filterContains
+ */
+function fetchBranchInfo(repo, filterContains) {
     const headers = new Headers();
     headers.append('Authorization', `Basic ${encodedAuthToken}`);
-    return fetch(APIS.retrieveRef(repoId, filterContains), {
+    return fetch(APIS.retrieveRef(repo, filterContains), {
             method: 'GET',
             headers: headers
         })
@@ -101,11 +146,16 @@ function fetchBranchInfo(repoId, filterContains) {
         .catch(err => alert(err));
 }
 
-function postNewReleaseBranch(repoId, branchName, rootId) {
+/**
+ * @param {Repository} repo
+ * @param {string} branchName
+ * @param {string} rootId
+ */
+function postNewReleaseBranch(repo, branchName, rootId) {
     const headers = new Headers();
     headers.append('Authorization', `Basic ${encodedAuthToken}`);
     headers.append('Content-Type', 'application/json');
-    return fetch(APIS.createRef(repoId), {
+    return fetch(APIS.createRef(repo), {
             method: 'POST',
             headers: headers,
             body: JSON.stringify([{
@@ -123,10 +173,15 @@ function postNewReleaseBranch(repoId, branchName, rootId) {
         .catch(err => alert(err));
 }
 
-function getBranchDiff(repoId, baseBranch, targetBranch) {
+/**
+ * @param {Repository} repo
+ * @param {string} baseBranch
+ * @param {string} targetBranch
+ */
+function getBranchDiff(repo, baseBranch, targetBranch) {
     const headers = new Headers();
     headers.append('Authorization', `Basic ${encodedAuthToken}`);
-    return fetch(APIS.getBranchDiff(repoId, baseBranch, targetBranch), {
+    return fetch(APIS.getBranchDiff(repo, baseBranch, targetBranch), {
             method: 'GET',
             headers: headers
         })
@@ -140,11 +195,19 @@ function getBranchDiff(repoId, baseBranch, targetBranch) {
         .catch(err => alert(err));
 }
 
-function postPullRequest(repoId, sourceBranch, targetBranch, title, desc, reviewers) {
+/**
+ * @param {Repository} repo
+ * @param {string} sourceBranch
+ * @param {string} targetBranch
+ * @param {string} title
+ * @param {string} desc
+ * @param {Array} reviewers
+ */
+function postPullRequest(repo, sourceBranch, targetBranch, title, desc, reviewers) {
     const headers = new Headers();
     headers.append('Authorization', `Basic ${encodedAuthToken}`);
     headers.append('Content-Type', 'application/json');
-    return fetch(APIS.createPr(repoId), {
+    return fetch(APIS.createPr(repo), {
             method: 'POST',
             headers: headers,
             body: JSON.stringify({
@@ -168,36 +231,47 @@ function postPullRequest(repoId, sourceBranch, targetBranch, title, desc, review
 // OPERATIONS
 ////////////////////////////////////////////////////////////////
 
-async function tryToCreatePr(repoId, sourceBranch, targetBranch) {
-    const diffResult = await getBranchDiff(repoId, targetBranch, sourceBranch);
+/**
+ * @param {Repository} repo
+ * @param {string} sourceBranch
+ * @param {string} targetBranch
+ */
+async function tryToCreatePr(repo, sourceBranch, targetBranch) {
+    const diffResult = await getBranchDiff(repo, targetBranch, sourceBranch);
 
     if (!diffResult.changes || diffResult.changes.length == 0) {
-        return { message: 'No changes or branch to create PR for', success: false };
+        return { message: `${repo.name} : no changes between ${sourceBranch} and ${targetBranch}.`, success: false };
     }
 
     const title = `Merge ${sourceBranch}`;
     const desc = `Merging ${sourceBranch} into ${targetBranch}`;
     const srcB = convertToGitBranchName(sourceBranch);
     const tarB = convertToGitBranchName(targetBranch);
-    const result = await postPullRequest(repoId, srcB, tarB, title, desc, []);
-    const message = result.mergeStatus === 'queued' ? 'PR created' : 'Failed to create PR';
-    return { message: message, success: result.mergeStatus === 'queued' };
+    const result = await postPullRequest(repo, srcB, tarB, title, desc, []);
+
+    const successMsg = `${repo.name} : created a PR that merges ${sourceBranch} into ${targetBranch}.`;
+    const failMsg = `${repo.name} : failed to create PR.`;
+
+    const success = result.mergeStatus === 'queued';
+    const message = success ? successMsg : failMsg;
+
+    return { message: message, success: success };
 }
 
-async function createReleaseBranch(releaseDate, repoId) {
-    const defaultBranchInfo = await fetchBranchInfo(repoId, repoMap[repoId].defaultBranch);
+async function createReleaseBranch(releaseDate, repo) {
+    const defaultBranchInfo = await fetchBranchInfo(repo, repo.defaultBranch);
     const gitBranchname = convertToGitBranchName(createReleaseBranchName(releaseDate));
-    const postResult = await postNewReleaseBranch(repoId, gitBranchname, defaultBranchInfo.value[0].objectId);
+    const postResult = await postNewReleaseBranch(repo, gitBranchname, defaultBranchInfo.value[0].objectId);
     return postResult.value.length > 0 && postResult.value[0].success;
 }
 
 async function loadRepositories() {
-    const jason = await fetchRepositories();
-    for (repo of jason.value) {
-        repoMap[repo.id] = {
-            id: repo.id,
-            defaultBranch: trimBranchName(repo.defaultBranch),
-            name: repo.name
+    let id = 0;
+    for (orgTeam of CONFIG.ORG_PROJECTS) {
+        const jason = await fetchRepositories(orgTeam.ORGANIZATION, orgTeam.PROJECT);
+        for (repo of jason.value) {
+            repoMap[id] = mapJsonToRepository(repo, orgTeam.ORGANIZATION, orgTeam.PROJECT, id);
+            id++;
         }
     }
     return 'Success';
@@ -207,16 +281,19 @@ async function findReposWithRelBranches(date) {
     await loadRepositories();
     const branchInfos = [];
     const relBranchName = createReleaseBranchName(date);
-    Object.entries(repoMap).forEach(el => {
-        const repoId = el[0];
-        branchInfos.push(fetchBranchInfo(repoId, relBranchName)
-            .then(jason => {
-                return {
-                    repoId: repoId,
-                    jason: jason
-                };
-            }));
-    });
+
+    const reposToCheck = [];
+    for (repoId in repoMap) {
+        reposToCheck.push(repoMap[repoId]);
+    }
+    reposToCheck.forEach(repo => branchInfos.push(fetchBranchInfo(repo, relBranchName)
+        .then(jason => {
+            return {
+                repoId: repo.id,
+                jason: jason
+            };
+        })));
+
     return Promise.all(branchInfos).then(resp => {
         return resp.filter(bInfo => bInfo.jason.count > 0)
             .map(bInfo => bInfo.repoId);
@@ -253,10 +330,11 @@ async function renderBranchCreator() {
         event.preventDefault();
         const repositories = document.querySelectorAll('#repoFieldSet>input');
         const releaseDate = new Date(document.querySelector('#releaseDate').valueAsNumber);
-        repositories.forEach(repo => {
-            if (repo.checked) {
-                createReleaseBranch(releaseDate, repo.value).then(success => {
-                    const resultMessage = `${repo.name} ${success ? 'created branch' : 'failed to create branch'}\n`;
+        repositories.forEach(repoEl => {
+            if (repoEl.checked) {
+                const repo = repoMap[repoEl.id];
+                createReleaseBranch(releaseDate, repo).then(success => {
+                    const resultMessage = `${repoEl.name} ${success ? 'created branch' : 'failed to create branch'}\n`;
                     textAreaEl.value = textAreaEl.value ? textAreaEl.value + resultMessage : resultMessage;
                 });
             }
@@ -316,13 +394,10 @@ async function renderCreatePr() {
 
     button.onclick = () => {
         reposToMerge.forEach(repoId => {
-            CONSTANTS.TARGET_BRANCHES.forEach(targetBranch => {
-                tryToCreatePr(repoId, releaseBranchName, targetBranch)
+            CONFIG.TARGET_BRANCHES.forEach(targetBranch => {
+                tryToCreatePr(repoMap[repoId], releaseBranchName, targetBranch)
                     .then(resp => {
-                        if (resp.success) {
-                            const resultMessage = repoMap[repoId].name + ` created PR into ${targetBranch}\n`;
-                            textAreaEl.value = textAreaEl.value ? textAreaEl.value + resultMessage : resultMessage;
-                        }
+                        textAreaEl.value = (textAreaEl.value ? textAreaEl.value + resp.message : resp.message) + '\n';
                     });
             });
         });

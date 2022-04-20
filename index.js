@@ -258,10 +258,19 @@ async function tryToCreatePr(repo, sourceBranch, targetBranch) {
     return { message: message, success: success };
 }
 
+/**
+ * @param {Date} releaseDate
+ * @param {Repository} repo
+ */
 async function createReleaseBranch(releaseDate, repo) {
-    const defaultBranchInfo = await fetchBranchInfo(repo, repo.defaultBranch);
+    const branchName = trimBranchName(repo.defaultBranch, repo.defaultBranch);
+    const defaultBranchInfo = await fetchBranchInfo(repo, '/' + branchName);
     const gitBranchname = convertToGitBranchName(createReleaseBranchName(releaseDate));
-    const postResult = await postNewReleaseBranch(repo, gitBranchname, defaultBranchInfo.value[0].objectId);
+    const branch = defaultBranchInfo.value.filter(el => trimBranchName(el.name) === branchName);
+    if (branch.length === 0) {
+        throw `Could not find branch with name ${branchName} from the repository ${repo.name}`;
+    }
+    const postResult = await postNewReleaseBranch(repo, gitBranchname, objId);
     return postResult.value.length > 0 && postResult.value[0].success;
 }
 

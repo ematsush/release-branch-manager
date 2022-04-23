@@ -270,7 +270,7 @@ async function createReleaseBranch(releaseDate, repo) {
     if (branch.length === 0) {
         throw `Could not find branch with name ${branchName} from the repository ${repo.name}`;
     }
-    const postResult = await postNewReleaseBranch(repo, gitBranchname, objId);
+    const postResult = await postNewReleaseBranch(repo, gitBranchname, branch[0].objectId);
     return postResult.value.length > 0 && postResult.value[0].success;
 }
 

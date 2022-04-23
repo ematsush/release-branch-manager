@@ -321,15 +321,15 @@ async function findReposWithRelBranches(date) {
 // RENDER
 ////////////////////////////////////////////////////////////////
 
-async function renderBranchCreator() {
+async function renderMultiSelect(title, btnText, submitFunc, loadSelectVals) {
     const fieldSetEl = document.createElement('fieldset');
     fieldSetEl.id = 'repoFieldSet';
     const legendEl = document.createElement('legend');
-    legendEl.innerText = 'Repositories to create branches from';
+    legendEl.innerText = title;
     fieldSetEl.appendChild(legendEl);
 
     const buttonEl = document.createElement('button');
-    buttonEl.innerText = 'Create Branches';
+    buttonEl.innerText = btnText;
 
     const formEl = document.createElement('form');
     formEl.appendChild(fieldSetEl);
@@ -343,21 +343,33 @@ async function renderBranchCreator() {
     textAreaEl.readOnly = true;
     controlAreaEl.appendChild(textAreaEl);
 
-    formEl.addEventListener('submit', event => {
+    formEl.addEventListener('submit', submitFunc);
+
+    await loadSelectVals(fieldSetEl);
+}
+
+function onCreateBranchOptionClick() {
+    const releaseDateEl = document.querySelector('#releaseDate');
+    if (releaseDateEl.value && !releaseDateEl.disabled) {
+        releaseDateEl.disabled = true;
+
+        function createBranches(event) {
         event.preventDefault();
+            const resultArea = document.querySelector('#resultArea');
         const repositories = document.querySelectorAll('#repoFieldSet>input');
-        const releaseDate = new Date(document.querySelector('#releaseDate').valueAsNumber);
+            const releaseDate = new Date(releaseDateEl.valueAsNumber);
         repositories.forEach(repoEl => {
             if (repoEl.checked) {
                 const repo = repoMap[repoEl.id];
                 createReleaseBranch(releaseDate, repo).then(success => {
                     const resultMessage = `${repoEl.name} ${success ? 'created branch' : 'failed to create branch'}\n`;
-                    textAreaEl.value = textAreaEl.value ? textAreaEl.value + resultMessage : resultMessage;
+                        resultArea.value = resultArea.value ? resultArea.value + resultMessage : resultMessage;
                 });
             }
         });
-    });
+        }
 
+        async function loadSelectVals(fieldSetEl) {
     await loadRepositories();
     for (repoId in repoMap) {
         const repo = repoMap[repoId];
@@ -377,62 +389,55 @@ async function renderBranchCreator() {
     }
 }
 
-async function renderCreatePr() {
-    const ulEl = document.createElement('ul');
-
-    const textAreaEl = document.createElement('textarea');
-    textAreaEl.id = 'prCreationBox';
-
-    const button = document.createElement('button');
-    button.innerText = 'Create PRs';
-
-    const controlAreaEl = document.querySelector('#controlArea');
-
-    const date = new Date(document.querySelector('#releaseDate').valueAsNumber);
-    const releaseBranchName = createReleaseBranchName(date);
-
-    const h4 = document.createElement('h4');
-    h4.innerText = `Repositories with ${releaseBranchName} branch:`;
-
-    const availableRepoDiv = document.createElement('div');
-    availableRepoDiv.appendChild(h4);
-    availableRepoDiv.appendChild(ulEl);
-    availableRepoDiv.appendChild(button);
-
-    controlAreaEl.appendChild(availableRepoDiv);
-    controlAreaEl.appendChild(textAreaEl);
-
-    const reposToMerge = await findReposWithRelBranches(date);
-    for (repoId of reposToMerge) {
-        const listItemEl = document.createElement('li');
-        listItemEl.innerText = repoMap[repoId].name;
-        ulEl.appendChild(listItemEl);
-    }
-
-    button.onclick = () => {
-        reposToMerge.forEach(repoId => {
-            CONFIG.TARGET_BRANCHES.forEach(targetBranch => {
-                tryToCreatePr(repoMap[repoId], releaseBranchName, targetBranch)
-                    .then(resp => {
-                        textAreaEl.value = (textAreaEl.value ? textAreaEl.value + resp.message : resp.message) + '\n';
-                    });
-            });
-        });
-    };
-}
-
-function onCreateBranchOptionClick() {
-    const releaseDate = document.querySelector('#releaseDate');
-    if (releaseDate.value && !releaseDate.disabled) {
-        releaseDate.disabled = true;
-        renderBranchCreator();
+        renderMultiSelect('Create release branches from', 'Create branches', createBranches, loadSelectVals);
     }
 }
 
 function onCreatePrsOptionClick() {
-    const releaseDate = document.querySelector('#releaseDate');
-    if (releaseDate.value && !releaseDate.disabled) {
-        releaseDate.disabled = true;
-        renderCreatePr();
+    const releaseDateEl = document.querySelector('#releaseDate');
+    if (releaseDateEl.value && !releaseDateEl.disabled) {
+        releaseDateEl.disabled = true;
+        const releaseDate = new Date(releaseDateEl.valueAsNumber);
+        const releaseBranch = createReleaseBranchName(releaseDate);
+
+        function mergeBranches(event) {
+            event.preventDefault();
+            const resultArea = document.querySelector('#resultArea');
+            const repositories = document.querySelectorAll('#repoFieldSet>input');
+            repositories.forEach(repoEl => {
+                if (repoEl.checked) {
+            CONFIG.TARGET_BRANCHES.forEach(targetBranch => {
+                        tryToCreatePr(repoMap[repoEl.id], releaseBranch, targetBranch)
+                    .then(resp => {
+                                resultArea.value = (resultArea.value ? resultArea.value + resp.message : resp.message) + '\n';
+                    });
+            });
+                }
+        });
+}
+
+        async function loadSelectVals(fieldSetEl) {
+            const reposToMerge = await findReposWithRelBranches(releaseDate);
+            for (repoId of reposToMerge) {
+                const repo = repoMap[repoId];
+
+                const checkBox = document.createElement('input');
+                checkBox.type = 'checkbox';
+                checkBox.id = repo.id;
+                checkBox.value = repo.id;
+                checkBox.name = repo.name;
+
+                const label = document.createElement('label');
+                label.innerText = `${repo.name}`;
+                label.for = repo.id;
+                fieldSetEl.appendChild(checkBox);
+                fieldSetEl.appendChild(label);
+                fieldSetEl.appendChild(document.createElement('br'));
+    }
+}
+
+        const title = `Repositories with branch ${releaseBranch}`;
+
+        renderMultiSelect(title, 'Merge Branches', mergeBranches, loadSelectVals);
     }
 }

@@ -275,14 +275,22 @@ async function createReleaseBranch(releaseDate, repo) {
 }
 
 async function loadRepositories() {
-    let id = 0;
+    let results = [];
     for (orgTeam of CONFIG.ORG_PROJECTS) {
         const jason = await fetchRepositories(orgTeam.ORGANIZATION, orgTeam.PROJECT);
-        for (repo of jason.value) {
-            repoMap[id] = mapJsonToRepository(repo, orgTeam.ORGANIZATION, orgTeam.PROJECT, id);
-            id++;
+        results = results.concat(jason.value.map(el => {
+            return {
+                repo: el,
+                org: orgTeam.ORGANIZATION,
+                proj: orgTeam.PROJECT
         }
+        }));
     }
+
+    results.sort((a, b) => a.repo.name.localeCompare(b.repo.name));
+    results.forEach((el, i) => {
+        repoMap[i] = mapJsonToRepository(el.repo, el.org, el.proj, i);
+    });
     return 'Success';
 }
 
